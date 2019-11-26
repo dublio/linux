@@ -102,7 +102,8 @@ static inline struct blk_mq_hw_ctx *blk_mq_map_queue_type(struct request_queue *
  */
 static inline struct blk_mq_hw_ctx *blk_mq_map_queue(struct request_queue *q,
 						     unsigned int flags,
-						     struct blk_mq_ctx *ctx)
+						     struct blk_mq_ctx *ctx,
+						     int wrr)
 {
 	enum hctx_type type = HCTX_TYPE_DEFAULT;
 
@@ -111,7 +112,22 @@ static inline struct blk_mq_hw_ctx *blk_mq_map_queue(struct request_queue *q,
 	 */
 	if (flags & REQ_HIPRI)
 		type = HCTX_TYPE_POLL;
-	else if ((flags & REQ_OP_MASK) == REQ_OP_READ)
+	else if (wrr > BLK_WRR_NONE && wrr < BLK_WRR_COUNT) {
+		switch (wrr) {
+		case BLK_WRR_LOW:
+			type = HCTX_TYPE_WRR_LOW;
+			break;
+		case BLK_WRR_MEDIUM:
+			type = HCTX_TYPE_WRR_MEDIUM;
+			break;
+		case BLK_WRR_HIGH:
+			type = HCTX_TYPE_WRR_HIGH;
+			break;
+		default:
+			type = HCTX_TYPE_WRR_URGENT;
+			break;
+		}
+	} else if ((flags & REQ_OP_MASK) == REQ_OP_READ)
 		type = HCTX_TYPE_READ;
 	
 	return ctx->hctxs[type];
