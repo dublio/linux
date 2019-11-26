@@ -193,15 +193,33 @@ struct blk_mq_queue_map {
  * enum hctx_type - Type of hardware queue
  * @HCTX_TYPE_DEFAULT:	All I/O not otherwise accounted for.
  * @HCTX_TYPE_READ:	Just for READ I/O.
+ * @HCTX_TYPE_WRR_LOW:     Weighted Round Robin low priority, when I/O is not polled.
+ * @HCTX_TYPE_WRR_MEDIUM:  Weighted Round Robin medium priority, when I/O is not polled.
+ * @HCTX_TYPE_WRR_HIGH:    Weighted Round Robin high priority, when I/O is not polled.
+ * @HCTX_TYPE_WRR_URGENT:  Weighted Round Robin urgent priority, when I/O is not polled.
  * @HCTX_TYPE_POLL:	Polled I/O of any kind.
  * @HCTX_MAX_TYPES:	Number of types of hctx.
  */
 enum hctx_type {
 	HCTX_TYPE_DEFAULT,
 	HCTX_TYPE_READ,
+	HCTX_TYPE_WRR_LOW,
+	HCTX_TYPE_WRR_MEDIUM,
+	HCTX_TYPE_WRR_HIGH,
+	HCTX_TYPE_WRR_URGENT,
 	HCTX_TYPE_POLL,
 
 	HCTX_MAX_TYPES,
+};
+
+enum blk_wrr {
+	BLK_WRR_NONE,
+	BLK_WRR_LOW,
+	BLK_WRR_MEDIUM,
+	BLK_WRR_HIGH,
+	BLK_WRR_URGENT,
+
+	BLK_WRR_COUNT,
 };
 
 /**

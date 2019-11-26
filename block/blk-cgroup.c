@@ -830,6 +830,91 @@ static int blkcg_print_stat(struct seq_file *sf, void *v)
 	return 0;
 }
 
+static const char *blk_wrr_name[BLK_WRR_COUNT] = {
+	[BLK_WRR_NONE]		= "none",
+	[BLK_WRR_LOW]		= "low",
+	[BLK_WRR_MEDIUM]	= "medium",
+	[BLK_WRR_HIGH]		= "high",
+	[BLK_WRR_URGENT]	= "urgent",
+};
+
+static inline const char *blk_wrr_to_name(int wrr)
+{
+	if (wrr < BLK_WRR_NONE || wrr >= BLK_WRR_COUNT)
+		return "wrong";
+
+	return blk_wrr_name[wrr];
+}
+
+static ssize_t blkcg_wrr_write(struct kernfs_open_file *of,
+			 char *buf, size_t nbytes, loff_t off)
+{
+	struct blkcg *blkcg = css_to_blkcg(of_css(of));
+	struct gendisk *disk;
+	struct request_queue *q;
+	struct blkcg_gq *blkg;
+	unsigned int major, minor;
+	int wrr, key_len, part, ret;
+	char *body;
+
+	if (sscanf(buf, "%u:%u%n", &major, &minor, &key_len) != 2)
+		return -EINVAL;
+
+	body = buf + key_len;
+	if (!isspace(*body))
+		return -EINVAL;
+	body = skip_spaces(body);
+	wrr = sysfs_match_string(blk_wrr_name, body);
+	if (wrr == BLK_WRR_COUNT)
+		return -EINVAL;
+
+	disk = get_gendisk(MKDEV(major, minor), &part);
+	if (!disk)
+		return -ENODEV;
+	if (part) {
+		ret = -EINVAL;
+		goto fail;
+	}
+
+	q = disk->queue;
+
+	blkg = blkg_lookup_create(blkcg, q);
+
+	atomic_set(&blkg->wrr, wrr);
+	put_disk_and_module(disk);
+
+	return nbytes;
+fail:
+	put_disk_and_module(disk);
+	return ret;
+}
+
+static int blkcg_wrr_show(struct seq_file *sf, void *v)
+{
+	struct blkcg *blkcg = css_to_blkcg(seq_css(sf));
+	struct blkcg_gq *blkg;
+
+	rcu_read_lock();
+
+	hlist_for_each_entry_rcu(blkg, &blkcg->blkg_list, blkcg_node) {
+		const char *dname;
+		char *buf;
+		size_t size = seq_get_buf(sf, &buf), off = 0;
+
+		dname = blkg_dev_name(blkg);
+		if (!dname)
+			continue;
+
+		off += scnprintf(buf+off, size-off, "%s %s\n", dname,
+			blk_wrr_to_name(atomic_read(&blkg->wrr)));
+		seq_commit(sf, off);
+	}
+
+	rcu_read_unlock();
+	return 0;
+}
+
+
 static struct cftype blkcg_files[] = {
 	{
 		.name = "stat",
@@ -843,6 +928,12 @@ static struct cftype blkcg_legacy_files[] = {
 	{
 		.name = "reset_stats",
 		.write_u64 = blkcg_reset_stats,
+	},
+	{
+		.name = "wrr",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.write = blkcg_wrr_write,
+		.seq_show = blkcg_wrr_show,
 	},
 	{ }	/* terminate */
 };

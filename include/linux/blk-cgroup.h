@@ -138,6 +138,8 @@ struct blkcg_gq {
 	atomic64_t			delay_start;
 	u64				last_delay;
 	int				last_use;
+	/* weighted round robin */
+	atomic_t			wrr;
 
 	struct rcu_head			rcu_head;
 };
