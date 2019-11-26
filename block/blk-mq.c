@@ -340,6 +340,12 @@ static struct request *blk_mq_get_request(struct request_queue *q,
 	unsigned int tag;
 	bool clear_ctx_on_error = false;
 	u64 alloc_time_ns = 0;
+	int wrr;
+
+	if (bio && bio->bi_blkg)
+		wrr = atomic_read(&bio->bi_blkg->wrr);
+	else
+		wrr = BLK_WRR_NONE;
 
 	blk_queue_enter_live(q);
 
@@ -354,7 +360,7 @@ static struct request *blk_mq_get_request(struct request_queue *q,
 	}
 	if (likely(!data->hctx))
 		data->hctx = blk_mq_map_queue(q, data->cmd_flags,
-						data->ctx);
+						data->ctx, wrr);
 	if (data->cmd_flags & REQ_NOWAIT)
 		data->flags |= BLK_MQ_REQ_NOWAIT;
 
@@ -374,7 +380,7 @@ static struct request *blk_mq_get_request(struct request_queue *q,
 		blk_mq_tag_busy(data->hctx);
 	}
 
-	tag = blk_mq_get_tag(data);
+	tag = blk_mq_get_tag(data, wrr);
 	if (tag == BLK_MQ_TAG_FAIL) {
 		if (clear_ctx_on_error)
 			data->ctx = NULL;
@@ -1047,7 +1053,7 @@ bool blk_mq_get_driver_tag(struct request *rq)
 		data.flags |= BLK_MQ_REQ_RESERVED;
 
 	shared = blk_mq_tag_busy(data.hctx);
-	rq->tag = blk_mq_get_tag(&data);
+	rq->tag = blk_mq_get_tag(&data, BLK_WRR_NONE);
 	if (rq->tag >= 0) {
 		if (shared) {
 			rq->rq_flags |= RQF_MQ_INFLIGHT;

@@ -7,6 +7,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/blk-mq.h>
+#include <linux/blk-cgroup.h>
 
 #include <trace/events/block.h>
 
@@ -326,7 +327,9 @@ bool __blk_mq_sched_bio_merge(struct request_queue *q, struct bio *bio,
 {
 	struct elevator_queue *e = q->elevator;
 	struct blk_mq_ctx *ctx = blk_mq_get_ctx(q);
-	struct blk_mq_hw_ctx *hctx = blk_mq_map_queue(q, bio->bi_opf, ctx);
+	struct blkcg_gq *blkg = bio->bi_blkg;
+	int wrr = blkg ? atomic_read(&blkg->wrr) : BLK_WRR_NONE;
+	struct blk_mq_hw_ctx *hctx = blk_mq_map_queue(q, bio->bi_opf, ctx, wrr);
 	bool ret = false;
 	enum hctx_type type;
 

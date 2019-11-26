@@ -420,6 +420,10 @@ static int hctx_busy_show(void *data, struct seq_file *m)
 static const char *const hctx_types[] = {
 	[HCTX_TYPE_DEFAULT]	= "default",
 	[HCTX_TYPE_READ]	= "read",
+	[HCTX_TYPE_WRR_LOW]	= "wrr_low",
+	[HCTX_TYPE_WRR_MEDIUM]	= "wrr_medium",
+	[HCTX_TYPE_WRR_HIGH]	= "wrr_high",
+	[HCTX_TYPE_WRR_URGENT]	= "wrr_urgent",
 	[HCTX_TYPE_POLL]	= "poll",
 };
 
