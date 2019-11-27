@@ -273,7 +273,7 @@ struct irq_affinity_notify {
 	void (*release)(struct kref *ref);
 };
 
-#define	IRQ_AFFINITY_MAX_SETS  4
+#define	IRQ_AFFINITY_MAX_SETS  6
 
 /**
  * struct irq_affinity - Description for automatic irq affinity assignements

@@ -78,6 +78,22 @@ static unsigned int poll_queues;
 module_param(poll_queues, uint, 0644);
 MODULE_PARM_DESC(poll_queues, "Number of queues to use for polled IO.");
 
+static int wrr_low_queues;
+module_param(wrr_low_queues, int, 0644);
+MODULE_PARM_DESC(wrr_low_queues, "Number of WRR low queues.");
+
+static int wrr_medium_queues;
+module_param(wrr_medium_queues, int, 0644);
+MODULE_PARM_DESC(wrr_medium_queues, "Number of WRR medium queues.");
+
+static int wrr_high_queues;
+module_param(wrr_high_queues, int, 0644);
+MODULE_PARM_DESC(wrr_high_queues, "Number of WRR high queues.");
+
+static int wrr_urgent_queues;
+module_param(wrr_urgent_queues, int, 0644);
+MODULE_PARM_DESC(wrr_urgent_queues, "Number of WRR urgent queues.");
+
 struct nvme_dev;
 struct nvme_queue;
 
@@ -208,6 +224,14 @@ struct nvme_iod {
 	dma_addr_t meta_dma;
 	struct scatterlist *sg;
 };
+
+static inline bool nvme_is_wrr_allocated(struct nvme_dev *dev)
+{
+	return dev->io_queues[HCTX_TYPE_WRR_LOW] +
+		dev->io_queues[HCTX_TYPE_WRR_MEDIUM] +
+		dev->io_queues[HCTX_TYPE_WRR_HIGH] +
+		dev->io_queues[HCTX_TYPE_WRR_URGENT] > 0;
+}
 
 static unsigned int max_io_queues(void)
 {
@@ -1131,19 +1155,24 @@ static int adapter_alloc_cq(struct nvme_dev *dev, u16 qid,
 }
 
 static int adapter_alloc_sq(struct nvme_dev *dev, u16 qid,
-						struct nvme_queue *nvmeq)
+				struct nvme_queue *nvmeq, int wrr_flag)
 {
 	struct nvme_ctrl *ctrl = &dev->ctrl;
 	struct nvme_command c;
 	int flags = NVME_QUEUE_PHYS_CONTIG;
 
-	/*
-	 * Some drives have a bug that auto-enables WRRU if MEDIUM isn't
-	 * set. Since URGENT priority is zeroes, it makes all queues
-	 * URGENT.
-	 */
-	if (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ)
-		flags |= NVME_SQ_PRIO_MEDIUM;
+
+	if (!dev->ctrl.wrr_enabled && !nvme_is_wrr_allocated(dev)) {
+		/*
+		 * Some drives have a bug that auto-enables WRRU if MEDIUM isn't
+		 * set. Since URGENT priority is zeroes, it makes all queues
+		 * URGENT.
+		 */
+		if (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ)
+			flags |= NVME_SQ_PRIO_MEDIUM;
+	} else {
+		flags |= wrr_flag;
+	}
 
 	/*
 	 * Note: we (ab)use the fact that the prp fields survive if no data
@@ -1513,11 +1542,51 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 	wmb(); /* ensure the first interrupt sees the initialization */
 }
 
-static int nvme_create_queue(struct nvme_queue *nvmeq, int qid, bool polled)
+static int nvme_create_queue(struct nvme_queue *nvmeq, int qid)
 {
 	struct nvme_dev *dev = nvmeq->dev;
-	int result;
 	u16 vector = 0;
+	int start, end, result, wrr_flag;
+	bool polled = false;
+	enum hctx_type type;
+
+	/* 0 for admain queue, io queue index >= 1 */
+	start = 1;
+	/* get hardware context type base on qid */
+	for (type = HCTX_TYPE_DEFAULT; type < HCTX_MAX_TYPES; type++) {
+		end = start + dev->io_queues[type] - 1;
+		if (qid >= start && qid <= end)
+			break;
+		start = end + 1;
+	}
+
+	if (type == HCTX_TYPE_POLL)
+		polled = true;
+
+	if (dev->ctrl.wrr_enabled && nvme_is_wrr_allocated(dev)) {
+		/* set read,poll,default to medium by default */
+		switch (type) {
+		case HCTX_TYPE_WRR_LOW:
+			wrr_flag = NVME_SQ_PRIO_LOW;
+			break;
+		case HCTX_TYPE_WRR_MEDIUM:
+		case HCTX_TYPE_POLL:
+		case HCTX_TYPE_DEFAULT:
+		case HCTX_TYPE_READ:
+			wrr_flag = NVME_SQ_PRIO_MEDIUM;
+			break;
+		case HCTX_TYPE_WRR_HIGH:
+			wrr_flag = NVME_SQ_PRIO_HIGH;
+			break;
+		case HCTX_TYPE_WRR_URGENT:
+			wrr_flag = NVME_SQ_PRIO_URGENT;
+			break;
+		default:
+			return -EINVAL;
+		}
+	} else {
+		wrr_flag = NVME_SQ_PRIO_IGNORE;
+	}
 
 	clear_bit(NVMEQ_DELETE_ERROR, &nvmeq->flags);
 
@@ -1534,7 +1603,7 @@ static int nvme_create_queue(struct nvme_queue *nvmeq, int qid, bool polled)
 	if (result)
 		return result;
 
-	result = adapter_alloc_sq(dev, qid, nvmeq);
+	result = adapter_alloc_sq(dev, qid, nvmeq, wrr_flag);
 	if (result < 0)
 		return result;
 	if (result)
@@ -1704,7 +1773,7 @@ static int nvme_pci_configure_admin_queue(struct nvme_dev *dev)
 
 static int nvme_create_io_queues(struct nvme_dev *dev)
 {
-	unsigned i, max, rw_queues;
+	unsigned i, max;
 	int ret = 0;
 
 	for (i = dev->ctrl.queue_count; i <= dev->max_qid; i++) {
@@ -1715,17 +1784,8 @@ static int nvme_create_io_queues(struct nvme_dev *dev)
 	}
 
 	max = min(dev->max_qid, dev->ctrl.queue_count - 1);
-	if (max != 1 && dev->io_queues[HCTX_TYPE_POLL]) {
-		rw_queues = dev->io_queues[HCTX_TYPE_DEFAULT] +
-				dev->io_queues[HCTX_TYPE_READ];
-	} else {
-		rw_queues = max;
-	}
-
 	for (i = dev->online_queues; i <= max; i++) {
-		bool polled = i > rw_queues;
-
-		ret = nvme_create_queue(&dev->queues[i], i, polled);
+		ret = nvme_create_queue(&dev->queues[i], i);
 		if (ret)
 			break;
 	}
@@ -2006,7 +2066,9 @@ static int nvme_setup_host_mem(struct nvme_dev *dev)
 static void nvme_calc_irq_sets(struct irq_affinity *affd, unsigned int nrirqs)
 {
 	struct nvme_dev *dev = affd->priv;
-	unsigned int nr_read_queues;
+	unsigned int nr_total, nr, nr_read, nr_default;
+	unsigned int nr_wrr_urgent, nr_wrr_high, nr_wrr_medium, nr_wrr_low;
+	unsigned int nr_sets;
 
 	/*
 	 * If there is no interupt available for queues, ensure that
@@ -2019,20 +2081,85 @@ static void nvme_calc_irq_sets(struct irq_affinity *affd, unsigned int nrirqs)
 	 * If 'read_queues' > 0, ensure it leaves room for at least one write
 	 * queue.
 	 */
-	if (!nrirqs || nrirqs == 1) {
+	if (!nrirqs)
 		nrirqs = 1;
-		nr_read_queues = 0;
-	} else if (read_queues >= nrirqs) {
-		nr_read_queues = nrirqs - 1;
-	} else {
-		nr_read_queues = read_queues;
-	}
 
-	dev->io_queues[HCTX_TYPE_DEFAULT] = nrirqs - nr_read_queues;
-	affd->set_size[HCTX_TYPE_DEFAULT] = nrirqs - nr_read_queues;
-	dev->io_queues[HCTX_TYPE_READ] = nr_read_queues;
-	affd->set_size[HCTX_TYPE_READ] = nr_read_queues;
-	affd->nr_sets = nr_read_queues ? 2 : 1;
+	nr_total = nrirqs;
+
+	nr_read = nr_wrr_urgent = nr_wrr_high = nr_wrr_medium = nr_wrr_low = 0;
+
+	/* set default to 1, add all the rest queue to default at last */
+	nr = nr_default = 1;
+	nr_sets = 1;
+	nr_total -= nr;
+	if (!nr_total)
+		goto done;
+
+	/* read queues */
+	nr_read = nr = read_queues > nr_total ? nr_total : read_queues;
+	nr_total -= nr;
+	if (!nr_total)
+		goto done;
+
+	/* wrr low queues */
+	nr_wrr_low = nr = wrr_low_queues > nr_total ? nr_total : wrr_low_queues;
+	nr_total -= nr;
+	if (!nr_total)
+		goto done;
+
+	/* wrr medium queues */
+	nr_wrr_medium = nr =
+		wrr_medium_queues > nr_total ? nr_total : wrr_medium_queues;
+	nr_total -= nr;
+	if (!nr_total)
+		goto done;
+
+	/* wrr high queues */
+	nr_wrr_high = nr =
+		wrr_high_queues > nr_total ? nr_total : wrr_high_queues;
+	nr_total -= nr;
+	if (!nr_total)
+		goto done;
+
+	/* wrr urgent queues */
+	nr_wrr_urgent = nr =
+		wrr_urgent_queues > nr_total ? nr_total : wrr_urgent_queues;
+	nr_total -= nr;
+	if (!nr_total)
+		goto done;
+
+	/* add all the rest queue to default */
+	nr_default += nr_total;
+
+done:
+	dev->io_queues[HCTX_TYPE_DEFAULT] = nr_default;
+	affd->set_size[nr_sets - 1] = nr_default;
+	dev->io_queues[HCTX_TYPE_READ] = nr_read;
+	if (nr_read) {
+		nr_sets++;
+		affd->set_size[nr_sets - 1] = nr_read;
+	}
+	dev->io_queues[HCTX_TYPE_WRR_LOW] = nr_wrr_low;
+	if (nr_wrr_low) {
+		nr_sets++;
+		affd->set_size[nr_sets - 1] = nr_wrr_low;
+	}
+	dev->io_queues[HCTX_TYPE_WRR_MEDIUM] = nr_wrr_medium;
+	if (nr_wrr_medium) {
+		nr_sets++;
+		affd->set_size[nr_sets - 1] = nr_wrr_medium;
+	}
+	dev->io_queues[HCTX_TYPE_WRR_HIGH] = nr_wrr_high;
+	if (nr_wrr_high) {
+		nr_sets++;
+		affd->set_size[nr_sets - 1] = nr_wrr_high;
+	}
+	dev->io_queues[HCTX_TYPE_WRR_URGENT] = nr_wrr_urgent;
+	if (nr_wrr_urgent) {
+		nr_sets++;
+		affd->set_size[nr_sets - 1] = nr_wrr_urgent;
+	}
+	affd->nr_sets = nr_sets;
 }
 
 static int nvme_setup_irqs(struct nvme_dev *dev, unsigned int nr_io_queues)
@@ -2061,6 +2188,10 @@ static int nvme_setup_irqs(struct nvme_dev *dev, unsigned int nr_io_queues)
 	/* Initialize for the single interrupt case */
 	dev->io_queues[HCTX_TYPE_DEFAULT] = 1;
 	dev->io_queues[HCTX_TYPE_READ] = 0;
+	dev->io_queues[HCTX_TYPE_WRR_LOW] = 0;
+	dev->io_queues[HCTX_TYPE_WRR_MEDIUM] = 0;
+	dev->io_queues[HCTX_TYPE_WRR_HIGH] = 0;
+	dev->io_queues[HCTX_TYPE_WRR_URGENT] = 0;
 
 	/*
 	 * Some Apple controllers require all queues to use the
@@ -2162,10 +2293,16 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
 		nvme_suspend_io_queues(dev);
 		goto retry;
 	}
-	dev_info(dev->ctrl.device, "%d/%d/%d default/read/poll queues\n",
+
+	dev_info(dev->ctrl.device, "%d/%d/%d/%d/%d/%d/%d "
+			"default/read/poll/low/medium/high/urgent queues\n",
 					dev->io_queues[HCTX_TYPE_DEFAULT],
 					dev->io_queues[HCTX_TYPE_READ],
-					dev->io_queues[HCTX_TYPE_POLL]);
+					dev->io_queues[HCTX_TYPE_POLL],
+					dev->io_queues[HCTX_TYPE_WRR_LOW],
+					dev->io_queues[HCTX_TYPE_WRR_MEDIUM],
+					dev->io_queues[HCTX_TYPE_WRR_HIGH],
+					dev->io_queues[HCTX_TYPE_WRR_URGENT]);
 	return 0;
 }
 
@@ -2251,9 +2388,7 @@ static void nvme_dev_add(struct nvme_dev *dev)
 	if (!dev->ctrl.tagset) {
 		dev->tagset.ops = &nvme_mq_ops;
 		dev->tagset.nr_hw_queues = dev->online_queues - 1;
-		dev->tagset.nr_maps = 2; /* default + read */
-		if (dev->io_queues[HCTX_TYPE_POLL])
-			dev->tagset.nr_maps++;
+		dev->tagset.nr_maps = HCTX_MAX_TYPES;
 		dev->tagset.timeout = NVME_IO_TIMEOUT;
 		dev->tagset.numa_node = dev_to_node(dev->dev);
 		dev->tagset.queue_depth =
@@ -2688,7 +2823,30 @@ static int nvme_pci_get_address(struct nvme_ctrl *ctrl, char *buf, int size)
 
 static void nvme_pci_get_ams(struct nvme_ctrl *ctrl, u32 *ams)
 {
-	*ams = NVME_CC_AMS_RR;
+	/* if deivce doesn't support WRR, force reset wrr queues to 0 */
+	if (!NVME_CAP_AMS_WRRU(ctrl->cap)) {
+		wrr_low_queues = 0;
+		wrr_medium_queues = 0;
+		wrr_high_queues = 0;
+		wrr_urgent_queues = 0;
+
+		*ams = NVME_CC_AMS_RR;
+		ctrl->wrr_enabled = false;
+		return;
+	}
+
+	/*
+	 * if device support WRR and all wrr queues are  0, don't enable
+	 * device's WRR.
+	 */
+	if ((wrr_low_queues + wrr_medium_queues + wrr_high_queues +
+				wrr_urgent_queues) > 0) {
+		*ams = NVME_CC_AMS_WRRU;
+		ctrl->wrr_enabled = true;
+	} else {
+		*ams = NVME_CC_AMS_RR;
+		ctrl->wrr_enabled = false;
+	}
 }
 
 static const struct nvme_ctrl_ops nvme_pci_ctrl_ops = {
