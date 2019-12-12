@@ -970,23 +970,21 @@ static struct configfs_attribute *nvmet_referral_attrs[] = {
 	NULL,
 };
 
-static void nvmet_referral_release(struct config_item *item)
+static void nvmet_referral_release(struct config_group *group,
+		struct config_item *item)
 {
-	struct nvmet_port *parent = to_nvmet_port(item->ci_parent->ci_parent);
+	struct nvmet_port *parent = to_nvmet_port(group->cg_item.ci_parent);
 	struct nvmet_port *port = to_nvmet_port(item);
 
 	nvmet_referral_disable(parent, port);
 	kfree(port);
-}
 
-static struct configfs_item_operations nvmet_referral_item_ops = {
-	.release	= nvmet_referral_release,
-};
+	config_item_put(item);
+}
 
 static const struct config_item_type nvmet_referral_type = {
 	.ct_owner	= THIS_MODULE,
 	.ct_attrs	= nvmet_referral_attrs,
-	.ct_item_ops	= &nvmet_referral_item_ops,
 };
 
 static struct config_group *nvmet_referral_make(
@@ -1006,6 +1004,7 @@ static struct config_group *nvmet_referral_make(
 
 static struct configfs_group_operations nvmet_referral_group_ops = {
 	.make_group		= nvmet_referral_make,
+	.drop_item		= nvmet_referral_release,
 };
 
 static const struct config_item_type nvmet_referrals_type = {
