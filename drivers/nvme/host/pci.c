@@ -2477,10 +2477,20 @@ static void nvme_release_prp_pools(struct nvme_dev *dev)
 	dma_pool_destroy(dev->prp_small_pool);
 }
 
+static void nvme_clear_io_tags(struct nvme_dev *dev)
+{
+	int i;
+
+	for (i = 1; i < max_queue_count(); i++)
+		dev->queues[i].tags = NULL;
+}
+
 static void nvme_free_tagset(struct nvme_dev *dev)
 {
-	if (dev->tagset.tags)
+	if (dev->tagset.tags) {
+		nvme_clear_io_tags(dev);
 		blk_mq_free_tag_set(&dev->tagset);
+	}
 	dev->ctrl.tagset = NULL;
 }
 
