@@ -128,6 +128,15 @@ static inline sector_t bio_issue_size(struct bio_issue *issue)
 	return ((issue->value & BIO_ISSUE_SIZE_MASK) >> BIO_ISSUE_SIZE_SHIFT);
 }
 
+static inline void bio_issue_update_size(struct bio_issue *issue, sector_t size)
+{
+	size &= (1ULL << BIO_ISSUE_SIZE_BITS) - 1;
+	/* set all _issue_size bits to 1 */
+	issue->value |= (u64)BIO_ISSUE_SIZE_MASK;
+	/* set new size */
+	issue->value &= ((u64)size << BIO_ISSUE_SIZE_SHIFT);
+}
+
 static inline void bio_issue_init(struct bio_issue *issue,
 				       sector_t size)
 {
