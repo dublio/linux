@@ -1901,6 +1901,19 @@ struct bio *bio_split(struct bio *bio, int sectors,
 
 	split->bi_iter.bi_size = sectors << 9;
 
+	/*
+	 * reinit bio->bi_issue, the split.bi_iter.bi_size was copied
+	 * from @bio, bi_issue was initialized in this flow:
+	 * bio_clone_fast->__bio_clone_fast->blkcg_bio_issue_init
+	 *
+	 * So the split->bi_issue has a wrong size, so update the size
+	 * at here.
+	 *
+	 * Actually, we can just use blkcg_bio_issue_init, there is just
+	 * a bit difference for the issue_time.
+	 */
+	bio_issue_update_size(&split->bi_issue, bio_sectors(split));
+
 	if (bio_integrity(split))
 		bio_integrity_trim(split);
 
