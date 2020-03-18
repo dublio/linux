@@ -652,6 +652,7 @@ EXPORT_SYMBOL(blk_mq_complete_request);
 void blk_mq_start_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
+	struct bio *bio;
 
 	trace_block_rq_issue(q, rq);
 
@@ -660,6 +661,8 @@ void blk_mq_start_request(struct request *rq)
 		rq->stats_sectors = blk_rq_sectors(rq);
 		rq->rq_flags |= RQF_STATS;
 		rq_qos_issue(q, rq);
+		__rq_for_each_bio(bio, rq)
+			blkcg_bio_start_init(bio);
 	}
 
 	WARN_ON_ONCE(blk_mq_rq_state(rq) != MQ_RQ_IDLE);
