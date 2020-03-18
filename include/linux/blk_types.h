@@ -109,9 +109,37 @@ static inline bool blk_path_error(blk_status_t error)
 /* Reserved bit for blk-throtl */
 #define BIO_ISSUE_THROTL_SKIP_LATENCY (1ULL << 63)
 
+/* submit bio to block layer */
 struct bio_issue {
 	u64 value;
 };
+
+/*
+ * submit bio to the disk driver layer
+ *
+ * 63:51	reserved
+ * 50:0		bits: start time of bio
+ *
+ * same bitmask as bi_issue
+ */
+struct bio_start {
+	u64 value;
+};
+
+static inline u64 __bio_start_time(u64 time)
+{
+	return time & BIO_ISSUE_TIME_MASK;
+}
+
+static inline u64 bio_start_time(struct bio_start *start)
+{
+	return __bio_start_time(start->value);
+}
+
+static inline void bio_start_init(struct bio_start *start)
+{
+	start->value = ktime_get_ns() & BIO_ISSUE_TIME_MASK;
+}
 
 static inline u64 __bio_issue_time(u64 time)
 {
@@ -178,6 +206,7 @@ struct bio {
 	 */
 	struct blkcg_gq		*bi_blkg;
 	struct bio_issue	bi_issue;
+	struct bio_start	bi_start;
 #ifdef CONFIG_BLK_CGROUP_IOCOST
 	u64			bi_iocost_cost;
 #endif
