@@ -921,6 +921,12 @@ static struct cftype blkcg_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.seq_show = blkcg_print_stat,
 	},
+	{
+		.name = "wrr",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.write = blkcg_wrr_write,
+		.seq_show = blkcg_wrr_show,
+	},
 	{ }	/* terminate */
 };
 
