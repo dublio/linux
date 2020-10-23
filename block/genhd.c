@@ -109,6 +109,19 @@ static void part_stat_read_all(struct hd_struct *part, struct disk_stats *stat)
 	}
 }
 
+bool part_is_in_flight(struct hd_struct *part)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		if (part_stat_local_read_cpu(part, in_flight[0], cpu) ||
+			    part_stat_local_read_cpu(part, in_flight[1], cpu))
+			return true;
+	}
+
+	return false;
+}
+
 static unsigned int part_in_flight(struct hd_struct *part)
 {
 	unsigned int inflight = 0;

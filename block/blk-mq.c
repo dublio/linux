@@ -130,6 +130,32 @@ void blk_mq_in_flight_rw(struct request_queue *q, struct hd_struct *part,
 	inflight[1] = mi.inflight[1];
 }
 
+static bool blk_mq_part_check_inflight(struct blk_mq_hw_ctx *hctx,
+				  struct request *rq, void *priv,
+				  bool reserved)
+{
+	struct mq_inflight *mi = priv;
+
+	if (rq->part == mi->part && blk_mq_rq_state(rq) == MQ_RQ_IN_FLIGHT) {
+		mi->inflight[rq_data_dir(rq)]++;
+		/* return false to break loop early */
+		return false;
+	}
+
+	return true;
+}
+
+bool blk_mq_part_is_in_flight(struct request_queue *q, struct hd_struct *part)
+{
+	struct mq_inflight mi = { .part = part };
+
+	mi.inflight[0] = mi.inflight[1] = 0;
+
+	blk_mq_queue_tag_busy_iter(q, blk_mq_part_check_inflight, &mi);
+
+	return mi.inflight[0] + mi.inflight[1] > 0;
+}
+
 void blk_freeze_queue_start(struct request_queue *q)
 {
 	mutex_lock(&q->mq_freeze_lock);

@@ -1256,14 +1256,38 @@ unsigned int blk_rq_err_bytes(const struct request *rq)
 }
 EXPORT_SYMBOL_GPL(blk_rq_err_bytes);
 
+
+static int blk_part_get_inflight(struct hd_struct *part)
+{
+	struct request_queue *q;
+	bool inflight;
+
+	q = part_to_disk(part)->queue;
+	if (queue_is_mq(q))
+		inflight = blk_mq_part_is_in_flight(q, part);
+	else
+		inflight = part_is_in_flight(part);
+
+	return inflight ? 1 : 0;
+}
+
 static void update_io_ticks(struct hd_struct *part, unsigned long now, bool end)
 {
 	unsigned long stamp;
+	int inflight = -1;
 again:
 	stamp = READ_ONCE(part->stamp);
 	if (unlikely(stamp != now)) {
-		if (likely(cmpxchg(&part->stamp, stamp, now) == stamp))
-			__part_stat_add(part, io_ticks, end ? now - stamp : 1);
+		if (likely(cmpxchg(&part->stamp, stamp, now) == stamp)) {
+			if(end) {
+				__part_stat_add(part, io_ticks, now - stamp);
+			} else {
+				if (inflight == -1)
+					inflight = blk_part_get_inflight(part);
+				if (inflight > 0)
+					__part_stat_add(part, io_ticks, now - stamp);
+			}
+		}
 	}
 	if (part->partno) {
 		part = &part_to_disk(part)->part0;
