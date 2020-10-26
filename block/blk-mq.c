@@ -115,7 +115,7 @@ unsigned int blk_mq_in_flight(struct request_queue *q, struct hd_struct *part)
 {
 	struct mq_inflight mi = { .part = part };
 
-	blk_mq_queue_tag_busy_iter(q, blk_mq_check_inflight, &mi);
+	blk_mq_queue_tag_busy_iter(q, blk_mq_check_inflight, NULL, &mi);
 
 	return mi.inflight[0] + mi.inflight[1];
 }
@@ -125,9 +125,20 @@ void blk_mq_in_flight_rw(struct request_queue *q, struct hd_struct *part,
 {
 	struct mq_inflight mi = { .part = part };
 
-	blk_mq_queue_tag_busy_iter(q, blk_mq_check_inflight, &mi);
+	blk_mq_queue_tag_busy_iter(q, blk_mq_check_inflight, NULL, &mi);
 	inflight[0] = mi.inflight[0];
 	inflight[1] = mi.inflight[1];
+}
+
+static bool blk_mq_part_check_break(void *priv)
+{
+	struct mq_inflight *mi = priv;
+
+	/* return false to stop interate other hctx */
+	if (mi->inflight[0] || mi->inflight[1])
+		return false;
+
+	return true;
 }
 
 static bool blk_mq_part_check_inflight(struct blk_mq_hw_ctx *hctx,
@@ -151,7 +162,8 @@ bool blk_mq_part_is_in_flight(struct request_queue *q, struct hd_struct *part)
 
 	mi.inflight[0] = mi.inflight[1] = 0;
 
-	blk_mq_queue_tag_busy_iter(q, blk_mq_part_check_inflight, &mi);
+	blk_mq_queue_tag_busy_iter(q, blk_mq_part_check_inflight,
+					blk_mq_part_check_break, &mi);
 
 	return mi.inflight[0] + mi.inflight[1] > 0;
 }
@@ -909,11 +921,23 @@ static bool blk_mq_rq_inflight(struct blk_mq_hw_ctx *hctx, struct request *rq,
 	return true;
 }
 
+static bool blk_mq_rq_check_break(void *priv)
+{
+	bool *busy = priv;
+
+	/* return false to stop interate other hctx */
+	if (*busy)
+		return false;
+
+	return true;
+}
+
 bool blk_mq_queue_inflight(struct request_queue *q)
 {
 	bool busy = false;
 
-	blk_mq_queue_tag_busy_iter(q, blk_mq_rq_inflight, &busy);
+	blk_mq_queue_tag_busy_iter(q, blk_mq_rq_inflight,
+			blk_mq_rq_check_break, &busy);
 	return busy;
 }
 EXPORT_SYMBOL_GPL(blk_mq_queue_inflight);
@@ -1018,7 +1042,7 @@ static void blk_mq_timeout_work(struct work_struct *work)
 	if (!percpu_ref_tryget(&q->q_usage_counter))
 		return;
 
-	blk_mq_queue_tag_busy_iter(q, blk_mq_check_expired, &next);
+	blk_mq_queue_tag_busy_iter(q, blk_mq_check_expired, NULL, &next);
 
 	if (next != 0) {
 		mod_timer(&q->timeout, next);

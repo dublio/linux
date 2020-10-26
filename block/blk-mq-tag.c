@@ -401,14 +401,17 @@ EXPORT_SYMBOL(blk_mq_tagset_wait_completed_request);
  *		reserved) where rq is a pointer to a request and hctx points
  *		to the hardware queue associated with the request. 'reserved'
  *		indicates whether or not @rq is a reserved request.
- * @priv:	Will be passed as third argument to @fn.
+ *@check_break: Pointer to the function that will callbed for earch hctx on @q.
+ *		@check_break will break the loop for hctx when it return false,
+ *		if you want to iterate all hctx, set it to NULL.
+ * @priv:	Will be passed as third argument to @fn, or arg to @check_break
  *
  * Note: if @q->tag_set is shared with other request queues then @fn will be
  * called for all requests on all queues that share that tag set and not only
  * for requests associated with @q.
  */
 void blk_mq_queue_tag_busy_iter(struct request_queue *q, busy_iter_fn *fn,
-		void *priv)
+		check_break_fn *check_break, void *priv)
 {
 	struct blk_mq_hw_ctx *hctx;
 	int i;
@@ -434,7 +437,11 @@ void blk_mq_queue_tag_busy_iter(struct request_queue *q, busy_iter_fn *fn,
 		if (tags->nr_reserved_tags)
 			bt_for_each(hctx, tags->breserved_tags, fn, priv, true);
 		bt_for_each(hctx, tags->bitmap_tags, fn, priv, false);
+
+		if (check_break && !check_break(priv))
+			goto out;
 	}
+out:
 	blk_queue_exit(q);
 }
 
